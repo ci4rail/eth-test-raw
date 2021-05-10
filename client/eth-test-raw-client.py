@@ -8,9 +8,10 @@ import fcntl
 import struct
 import sys
 import os
+import datetime
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-from common import make_eth_header  # noqa: E402
+from common import make_eth_header, get_eth_header  # noqa: E402
 
 tool_description = """
 Simple test tool for ethernet interfaces.
@@ -19,6 +20,10 @@ Requires the corresponding server running on the peer machine
 """
 
 PAYLOAD_BYTES = 1500
+MAX_PACKET_SIZE = 2048  # for receive, should be a power of 2
+
+packets_sent = 0
+good_packets_received = 0
 
 
 def client(args):
@@ -31,15 +36,51 @@ def client(args):
     )
     s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW)
     s.bind((args.ifname, 0))
+    s.settimeout(args.timeout)
 
-    for seq_number in range(2):
-        eth_hdr = make_eth_header(src_mac, args.dst_mac)
-        payload = make_payload(PAYLOAD_BYTES, seq_number)
-        frame = eth_hdr + payload
+    seq_number = 0
+    start_time = datetime.now()
+    while True:
+        elapsed_time = datetime.now() - start_time
+        if args.runtime is not None and elapsed_time.total_seconds() > args.runtime:
+            break
 
-        print(frame)
+        next_seq_number = send_burst(src_mac, s, seq_number, args)
 
-        s.send(frame)
+        seq_number = next_seq_number
+
+
+def send_burst(src_mac, s, seq_number, args):
+    for i in range(args.burst):
+        send_frame(src_mac, s, seq_number, args)
+        seq_number += 1
+    return seq_number
+
+
+def send_frame(src_mac, s, seq_number, args):
+    eth_hdr = make_eth_header(src_mac, args.dst_mac)
+    payload = make_payload(PAYLOAD_BYTES, seq_number)
+    frame = eth_hdr + payload
+    s.send(frame)
+
+
+def recv_burst(src_mac, s, seq_number, args):
+    pass
+
+
+def recv_frame(src_mac, s, seq_number, args):
+    timeout = False
+    try:
+        pkt_bytes = s.recv(MAX_PACKET_SIZE)
+    except socket.timeout:
+        timeout = True
+
+    if(timeout is False):
+        ok, seq_number = validate_frame(pkt_bytes, src_mac, seq_number, args)
+
+
+def validate_frame(pkt_bytes, src_mac, seq_number, args):
+    rcv_dst_mac, rcv_dst_src, rcv_type = get_eth_header(pkt_bytes)
 
 
 def make_payload(payload_length, seq_number):
@@ -89,7 +130,7 @@ def command_line_args_parsing():
     )
     parser.add_argument(
         "-b",
-        "--burst-length",
+        "--burst",
         help="Number of frames to send as burst until to wait for reply (default: 1)",
         type=int,
         default=1,
@@ -100,6 +141,27 @@ def command_line_args_parsing():
         help="Delay in microseconds between subsequent bursts (default: None)",
         type=int,
         default=None,
+    )
+    parser.add_argument(
+        "-t",
+        "--timeout",
+        help="Timeout in seconds to wait for peer reply (default: 0.01)",
+        type=float,
+        default=0.01,
+    )
+    parser.add_argument(
+        "-e",
+        "--error_threshold",
+        help="stop after n errors, -1 to stop never (default: 1)",
+        type=int,
+        default=1,
+    )
+    parser.add_argument(
+        "-i",
+        "--interval",
+        help="print statistics after x seconds (default: 0.5)",
+        type=float,
+        default=0.5,
     )
     parser.add_argument(
         "-v",
