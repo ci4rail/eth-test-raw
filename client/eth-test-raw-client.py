@@ -1,3 +1,4 @@
+#!/usr/bin/python3
 #
 # Client part of eth-test-raw
 # Copyright (c) Ci4Rail GmbH
