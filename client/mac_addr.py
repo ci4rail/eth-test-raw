@@ -15,7 +15,3 @@ def get_mac_address(interface_name):
     output = subprocess.check_output(cmd)
     values = json.loads(output)
     return values[0]["address"]
-
-
-if __name__ == "__main__":
-    print(get_mac_address("eth0"))

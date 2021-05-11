@@ -10,7 +10,7 @@ import os
 import time
 import datetime
 import signal
-from .mac_addr import get_mac_address
+from mac_addr import get_mac_address
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from common import make_eth_header, get_eth_header, ETR_ETHER_TYPE  # noqa: E402
@@ -43,9 +43,9 @@ class Stats:
 
     def __str__(self):
         return (
-            f"sent: {self.packets_sent}, "
-            f"errors/lost: {self.error_count}, "
-            f"{self.bytes_per_second()/1e6:.2f} MByte/s"
+            f"sent pkts: {self.packets_sent:5d}, "
+            f"errors/lost pkts: {self.error_count:3d}, "
+            f"{self.bytes_per_second()/1e6:6.2f} MByte/s"
         )
 
 
@@ -59,6 +59,7 @@ def update_stats(
 
 
 def client(args):
+    exit_code = 0
     src_mac_string = get_mac_address(args.ifname)
     src_mac = mac_address_string_to_bytes(src_mac_string)
 
@@ -95,6 +96,7 @@ def client(args):
 
                 if args.error_threshold != -1 and global_stats.error_count >= args.error_threshold:
                     print("Stopped because error threshold reached")
+                    exit_code = 1
                     break
 
             seq_number += 1
@@ -110,6 +112,8 @@ def client(args):
         print("Stopped")
     finally:
         print(f"Total Stats: {global_stats}")
+
+    sys.exit(exit_code)
 
 
 def send_frame(src_mac, s, seq_number, args):
@@ -201,9 +205,9 @@ def command_line_args_parsing():
     parser.add_argument(
         "-t",
         "--timeout",
-        help="Timeout in seconds to wait for peer reply (default: 0.01)",
+        help="Timeout in seconds to wait for peer reply (default: 0.1)",
         type=float,
-        default=0.01,
+        default=0.1,
     )
     parser.add_argument(
         "-e",
