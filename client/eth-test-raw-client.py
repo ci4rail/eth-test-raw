@@ -11,7 +11,7 @@ import os
 import datetime
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-from common import make_eth_header, get_eth_header  # noqa: E402
+from common import make_eth_header, get_eth_header, ETR_ETHER_TYPE  # noqa: E402
 
 tool_description = """
 Simple test tool for ethernet interfaces.
@@ -22,8 +22,37 @@ Requires the corresponding server running on the peer machine
 PAYLOAD_BYTES = 1500
 MAX_PACKET_SIZE = 2048  # for receive, should be a power of 2
 
-packets_sent = 0
-good_packets_received = 0
+
+class Stats:
+    def __init__(self):
+        self.start_time = datetime.now()
+        self.packets_sent = 0
+        self.good_packets_received = 0
+        self.error_count = 0
+
+    def elapsed_seconds(self):
+        elapsed = datetime.now() - self.start_time
+        return elapsed.total_seconds()
+
+    def bytes_per_sec(self):
+        return (
+            self.good_packets_received * (PAYLOAD_BYTES + 14)
+        ) / self.elapsed_seconds()
+
+    def __str__(self):
+        return (
+            f"sent: {self.packets_sent}, good received: {self.good_packets_received}, "
+            "{self.byte_per_second:.2f}"
+        )
+
+
+def update_stats(
+    global_stats, interval_stats, packets_sent, packets_received, error_count
+):
+    for stats in [global_stats, interval_stats]:
+        stats.packets_sent += packets_sent
+        stats.packets_received += packets_received
+        stats.error_count += error_count
 
 
 def client(args):
@@ -39,22 +68,32 @@ def client(args):
     s.settimeout(args.timeout)
 
     seq_number = 0
-    start_time = datetime.now()
+
+    global_stats = Stats()
+    interval_stats = Stats()
+
     while True:
-        elapsed_time = datetime.now() - start_time
-        if args.runtime is not None and elapsed_time.total_seconds() > args.runtime:
+        if args.runtime is not None and global_stats.elapsed_seconds() > args.runtime:
             break
 
-        next_seq_number = send_burst(src_mac, s, seq_number, args)
-
-        seq_number = next_seq_number
-
-
-def send_burst(src_mac, s, seq_number, args):
-    for i in range(args.burst):
         send_frame(src_mac, s, seq_number, args)
+
+        try:
+            recv_frame(src_mac, s, seq_number, args)
+            update_stats(global_stats, interval_stats, 1, 1, 0)
+
+        except (socket.timeout, RuntimeError) as err:
+            if args.verbose:
+                print(f"Rx error {err}")
+            update_stats(global_stats, interval_stats, 1, 0, 1)
+
         seq_number += 1
-    return seq_number
+
+        if (interval_stats.elapsed_seconds() > args.interval):
+            print(interval_stats)
+            interval_stats = Stats()
+
+    print(f"Total Stats: {global_stats}")
 
 
 def send_frame(src_mac, s, seq_number, args):
@@ -64,29 +103,42 @@ def send_frame(src_mac, s, seq_number, args):
     s.send(frame)
 
 
-def recv_burst(src_mac, s, seq_number, args):
-    pass
-
-
 def recv_frame(src_mac, s, seq_number, args):
-    timeout = False
-    try:
-        pkt_bytes = s.recv(MAX_PACKET_SIZE)
-    except socket.timeout:
-        timeout = True
-
-    if(timeout is False):
-        ok, seq_number = validate_frame(pkt_bytes, src_mac, seq_number, args)
+    pkt_bytes = s.recv(MAX_PACKET_SIZE)
+    validate_frame(pkt_bytes, src_mac, seq_number, args)
 
 
 def validate_frame(pkt_bytes, src_mac, seq_number, args):
-    rcv_dst_mac, rcv_dst_src, rcv_type = get_eth_header(pkt_bytes)
+    rcv_dst_mac, rcv_src_mac, rcv_type = get_eth_header(pkt_bytes)
+
+    if rcv_dst_mac != src_mac:
+        raise RuntimeError(f"Bad dst mac {rcv_dst_mac} received. Expected {src_mac}")
+
+    if rcv_src_mac != args.dst_mac:
+        raise RuntimeError(
+            f"Bad src mac {rcv_src_mac} received. Expected {args.dst_mac}"
+        )
+
+    if rcv_type != ETR_ETHER_TYPE:
+        raise RuntimeError(
+            f"Bad eth type {rcv_type} received. Expected {ETR_ETHER_TYPE}"
+        )
+
+    rcv_seq_number = get_payload(pkt_bytes)
+    if rcv_seq_number != seq_number:
+        raise RuntimeError(
+            f"Bad seq number {rcv_seq_number} received. Expected {seq_number}"
+        )
 
 
 def make_payload(payload_length, seq_number):
     payload_hdr = struct.pack("!L", seq_number)
     payload = payload_hdr + bytes(payload_length - len(payload_hdr))
     return payload
+
+
+def get_payload(pkt_bytes):
+    return struct.unpack("!L", pkt_bytes[14:0])
 
 
 def get_mac_address(interface_name):
@@ -129,16 +181,9 @@ def command_line_args_parsing():
         default=None,
     )
     parser.add_argument(
-        "-b",
-        "--burst",
-        help="Number of frames to send as burst until to wait for reply (default: 1)",
-        type=int,
-        default=1,
-    )
-    parser.add_argument(
         "-d",
         "--delay",
-        help="Delay in microseconds between subsequent bursts (default: None)",
+        help="Delay in microseconds between pings (default: None)",
         type=int,
         default=None,
     )
