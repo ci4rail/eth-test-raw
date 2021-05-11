@@ -7,14 +7,10 @@ import argparse
 import socket
 import struct
 import sys
-import os
 import time
 import datetime
 import signal
-from mac_addr import get_mac_address
-
-sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-from common import make_eth_header, get_eth_header, ETR_ETHER_TYPE  # noqa: E402
+from ethtestraw_lib import make_eth_header, get_eth_header, ETR_ETHER_TYPE, get_mac_address  # noqa: E402
 
 tool_description = """
 Simple test tool for ethernet interfaces.

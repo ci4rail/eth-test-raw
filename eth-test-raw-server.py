@@ -5,11 +5,8 @@
 #
 import socket
 import sys
-import os
 import argparse
-
-sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-from common import ETR_ETHER_TYPE, make_eth_header, get_eth_header  # noqa: E402
+from ethtestraw_lib import ETR_ETHER_TYPE, make_eth_header, get_eth_header  # noqa: E402
 
 MAX_PACKET_SIZE = 2048  # should be a power of 2
 
