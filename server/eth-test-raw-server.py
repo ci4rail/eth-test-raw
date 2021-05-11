@@ -3,13 +3,12 @@
 # Copyright (c) Ci4Rail GmbH
 #
 import socket
-import struct
 import sys
 import os
 import argparse
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-from common import ETR_ETHER_TYPE, make_eth_header  # noqa: E402
+from common import ETR_ETHER_TYPE, make_eth_header, get_eth_header  # noqa: E402
 
 MAX_PACKET_SIZE = 2048  # should be a power of 2
 
@@ -24,7 +23,6 @@ def server(args):
         pkt_bytes, address = s.recvfrom(MAX_PACKET_SIZE)
         recv_eth_header = get_eth_header(pkt_bytes)
 
-        print(f"received{recv_eth_header} address {address}")
         payload = pkt_bytes[14:]
 
         # echo frame with reversed src/dest mac
@@ -33,11 +31,7 @@ def server(args):
         s.send(frame)
 
         if args.verbose:
-            print(frame)
-
-
-def get_eth_header(pkt_bytes):
-    return struct.unpack("!6s6sH", pkt_bytes[0:14])
+            print(frame[0:18])
 
 
 def command_line_args_parsing():

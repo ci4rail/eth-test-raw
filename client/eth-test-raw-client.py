@@ -8,7 +8,9 @@ import fcntl
 import struct
 import sys
 import os
+import time
 import datetime
+import signal
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from common import make_eth_header, get_eth_header, ETR_ETHER_TYPE  # noqa: E402
@@ -25,24 +27,25 @@ MAX_PACKET_SIZE = 2048  # for receive, should be a power of 2
 
 class Stats:
     def __init__(self):
-        self.start_time = datetime.now()
+        self.start_time = datetime.datetime.now()
         self.packets_sent = 0
         self.good_packets_received = 0
         self.error_count = 0
 
     def elapsed_seconds(self):
-        elapsed = datetime.now() - self.start_time
+        elapsed = datetime.datetime.now() - self.start_time
         return elapsed.total_seconds()
 
-    def bytes_per_sec(self):
+    def bytes_per_second(self):
         return (
             self.good_packets_received * (PAYLOAD_BYTES + 14)
         ) / self.elapsed_seconds()
 
     def __str__(self):
         return (
-            f"sent: {self.packets_sent}, good received: {self.good_packets_received}, "
-            "{self.byte_per_second:.2f}"
+            f"sent: {self.packets_sent}, "
+            f"errors/lost: {self.error_count}, "
+            f"{self.bytes_per_second()/1e6:.2f} MByte/s"
         )
 
 
@@ -51,7 +54,7 @@ def update_stats(
 ):
     for stats in [global_stats, interval_stats]:
         stats.packets_sent += packets_sent
-        stats.packets_received += packets_received
+        stats.good_packets_received += packets_received
         stats.error_count += error_count
 
 
@@ -61,9 +64,9 @@ def client(args):
 
     print(
         f"Own Mac: Interface={args.ifname}, "
-        "{src_mac_string} dest:{mac_address_bytes_to_string(dest_mac)}"
+        f"{src_mac_string} dest:{args.dst_mac}"
     )
-    s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW)
+    s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETR_ETHER_TYPE))
     s.bind((args.ifname, 0))
     s.settimeout(args.timeout)
 
@@ -72,32 +75,45 @@ def client(args):
     global_stats = Stats()
     interval_stats = Stats()
 
-    while True:
-        if args.runtime is not None and global_stats.elapsed_seconds() > args.runtime:
-            break
+    signal.signal(signal.SIGINT, signal.default_int_handler)
 
-        send_frame(src_mac, s, seq_number, args)
+    try:
+        while True:
+            if args.runtime is not None and global_stats.elapsed_seconds() > args.runtime:
+                break
 
-        try:
-            recv_frame(src_mac, s, seq_number, args)
-            update_stats(global_stats, interval_stats, 1, 1, 0)
+            send_frame(src_mac, s, seq_number, args)
 
-        except (socket.timeout, RuntimeError) as err:
-            if args.verbose:
-                print(f"Rx error {err}")
-            update_stats(global_stats, interval_stats, 1, 0, 1)
+            try:
+                recv_frame(src_mac, s, seq_number, args)
+                update_stats(global_stats, interval_stats, 1, 1, 0)
 
-        seq_number += 1
+            except (socket.timeout, RuntimeError) as err:
+                if args.verbose:
+                    print(f"seq {seq_number}: Rx error: {err}")
+                update_stats(global_stats, interval_stats, 1, 0, 1)
 
-        if (interval_stats.elapsed_seconds() > args.interval):
-            print(interval_stats)
-            interval_stats = Stats()
+                if args.error_threshold != -1 and global_stats.error_count >= args.error_threshold:
+                    print("Stopped because error threshold reached")
+                    break
 
-    print(f"Total Stats: {global_stats}")
+            seq_number += 1
+
+            if interval_stats.elapsed_seconds() > args.interval:
+                print(interval_stats)
+                interval_stats = Stats()
+
+            if args.delay is not None:
+                time.sleep(args.delay / 1e6)
+
+    except KeyboardInterrupt:
+        print("Stopped")
+    finally:
+        print(f"Total Stats: {global_stats}")
 
 
 def send_frame(src_mac, s, seq_number, args):
-    eth_hdr = make_eth_header(src_mac, args.dst_mac)
+    eth_hdr = make_eth_header(src_mac, mac_address_string_to_bytes(args.dst_mac))
     payload = make_payload(PAYLOAD_BYTES, seq_number)
     frame = eth_hdr + payload
     s.send(frame)
@@ -111,12 +127,15 @@ def recv_frame(src_mac, s, seq_number, args):
 def validate_frame(pkt_bytes, src_mac, seq_number, args):
     rcv_dst_mac, rcv_src_mac, rcv_type = get_eth_header(pkt_bytes)
 
-    if rcv_dst_mac != src_mac:
-        raise RuntimeError(f"Bad dst mac {rcv_dst_mac} received. Expected {src_mac}")
+    rcv_dst_mac_str = mac_address_bytes_to_string(rcv_dst_mac)
+    rcv_src_mac_str = mac_address_bytes_to_string(rcv_src_mac)
 
-    if rcv_src_mac != args.dst_mac:
+    if rcv_dst_mac != src_mac:
+        raise RuntimeError(f"Bad dst mac {rcv_dst_mac_str} received. Expected {src_mac}")
+
+    if rcv_src_mac_str != args.dst_mac:
         raise RuntimeError(
-            f"Bad src mac {rcv_src_mac} received. Expected {args.dst_mac}"
+            f"Bad src mac {rcv_src_mac_str} received. Expected {args.dst_mac}"
         )
 
     if rcv_type != ETR_ETHER_TYPE:
@@ -124,7 +143,7 @@ def validate_frame(pkt_bytes, src_mac, seq_number, args):
             f"Bad eth type {rcv_type} received. Expected {ETR_ETHER_TYPE}"
         )
 
-    rcv_seq_number = get_payload(pkt_bytes)
+    rcv_seq_number = get_payload(pkt_bytes)[0]
     if rcv_seq_number != seq_number:
         raise RuntimeError(
             f"Bad seq number {rcv_seq_number} received. Expected {seq_number}"
@@ -138,7 +157,7 @@ def make_payload(payload_length, seq_number):
 
 
 def get_payload(pkt_bytes):
-    return struct.unpack("!L", pkt_bytes[14:0])
+    return struct.unpack("!L", pkt_bytes[14:18])
 
 
 def get_mac_address(interface_name):
