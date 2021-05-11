@@ -4,13 +4,13 @@
 #
 import argparse
 import socket
-import fcntl
 import struct
 import sys
 import os
 import time
 import datetime
 import signal
+from .mac_addr import get_mac_address
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from common import make_eth_header, get_eth_header, ETR_ETHER_TYPE  # noqa: E402
@@ -158,14 +158,6 @@ def make_payload(payload_length, seq_number):
 
 def get_payload(pkt_bytes):
     return struct.unpack("!L", pkt_bytes[14:18])
-
-
-def get_mac_address(interface_name):
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    info = fcntl.ioctl(
-        s.fileno(), 0x8927, struct.pack("256s", bytes(interface_name, "utf-8")[:15])
-    )
-    return ":".join("%02x" % b for b in info[18:24])
 
 
 def mac_address_string_to_bytes(addr_string):
