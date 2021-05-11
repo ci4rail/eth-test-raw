@@ -67,8 +67,15 @@ Specify `-d` option to add a delay between each ping to the peer machine. E.g. `
 #### See More Error Details
 Specify `-v`
 
+#### Test Multiple NICs
+The server can handle multiple clients. It just echoes what it receives. So you can have a single peer machine running the server and many clients with NICs under test.
+
 ## How it works
 
-```sequence
-A -> B
-```
+* Client sends a raw ethernet packet to the server.
+    * Packet has a specific Etherent type (0xccdd), the maximum ethernet frame length (1518 bytes). The payload is just a 4-byte sequence number, and the rest is filled with zeroes.
+* Client waits for server reply.
+* When the server receives such a packet, it swaps source and destination MAC addresses and send the packet back.
+    * The Server does not do any error checking
+* When the Client has received the reply, it checks for correct header and sequence number
+* The Client executes a delay if the `-d` option was given
