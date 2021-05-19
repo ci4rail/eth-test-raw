@@ -14,7 +14,7 @@ Tested only under Linux (Rasperian OS and Yocto arm64). May work on Windows.
 Connect device with the NIC to be tested to a peer machine via Ethernet.
 You may have L2 switches in between, but no routers.
 
-Deploy this repository, or at least the folders `client`, `server` and common to both machines.
+Deploy this repository to both machines.
 Let's say, you have it deployed under ~/eth-raw-test.
 
 ### On the Server
@@ -28,7 +28,8 @@ Record the value for `link/ether`, e.g. `dc:a6:32:51:0e:e7`
 
 Start server on peer machine with root priviledges. Specify the name of the peer machine's NIC:
 ```bash
-python3 server/eth-test-raw-server.py eth0
+cd ~/eth-raw-test
+python3 eth-test-raw-server.py eth0
 ```
 
 ### On the Client
@@ -36,7 +37,8 @@ python3 server/eth-test-raw-server.py eth0
 Start the client specifying the interface name of the NIC to test and the peer machine's MAC address.
 You must have root priviledges:
 ```bash
-python3 /data/eth-test-raw/client/eth-test-raw-client.py enp5s0 dc:a6:32:51:0e:e7
+cd ~/eth-raw-test
+python3 eth-test-raw-client.py enp5s0 dc:a6:32:51:0e:e7
 ```
 
 In the above form, the client runs forever, until it is aborted, or the maximum number of errors have occurred (1 by default):
