@@ -10,7 +10,12 @@ import sys
 import time
 import datetime
 import signal
-from ethtestraw_lib import make_eth_header, get_eth_header, ETR_ETHER_TYPE, get_mac_address  # noqa: E402
+from ethtestraw_lib import (
+    make_eth_header,
+    get_eth_header,
+    ETR_ETHER_TYPE,
+    get_mac_address,
+)  # noqa: E402
 
 tool_description = """
 Simple test tool for ethernet interfaces.
@@ -20,6 +25,8 @@ Requires the corresponding server running on the peer machine
 
 PAYLOAD_BYTES = 1500
 MAX_PACKET_SIZE = 2048  # for receive, should be a power of 2
+
+seq_number = 0
 
 
 class Stats:
@@ -56,19 +63,16 @@ def update_stats(
 
 
 def client(args):
+    global seq_number
+
     exit_code = 0
     src_mac_string = get_mac_address(args.ifname)
     src_mac = mac_address_string_to_bytes(src_mac_string)
 
-    print(
-        f"Own Mac: Interface={args.ifname}, "
-        f"{src_mac_string} dest:{args.dst_mac}"
-    )
+    print(f"Own Mac: Interface={args.ifname}, " f"{src_mac_string} dest:{args.dst_mac}")
     s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETR_ETHER_TYPE))
     s.bind((args.ifname, 0))
     s.settimeout(args.timeout)
-
-    seq_number = 0
 
     global_stats = Stats()
     interval_stats = Stats()
@@ -77,13 +81,16 @@ def client(args):
 
     try:
         while True:
-            if args.runtime is not None and global_stats.elapsed_seconds() > args.runtime:
+            if (
+                args.runtime is not None
+                and global_stats.elapsed_seconds() > args.runtime  # noqa: W503
+            ):
                 break
 
             send_frame(src_mac, s, seq_number, args)
 
             try:
-                recv_frame(src_mac, s, seq_number, args)
+                recv_frame(src_mac, s, args)
                 update_stats(global_stats, interval_stats, 1, 1, 0)
 
             except (socket.timeout, RuntimeError) as err:
@@ -91,12 +98,13 @@ def client(args):
                     print(f"seq {seq_number}: Rx error: {err}")
                 update_stats(global_stats, interval_stats, 1, 0, 1)
 
-                if args.error_threshold != -1 and global_stats.error_count >= args.error_threshold:
+                if (
+                    args.error_threshold != -1
+                    and global_stats.error_count >= args.error_threshold  # noqa: W503
+                ):
                     print("Stopped because error threshold reached")
                     exit_code = 1
                     break
-
-            seq_number += 1
 
             if interval_stats.elapsed_seconds() > args.interval:
                 print(interval_stats)
@@ -120,21 +128,24 @@ def send_frame(src_mac, s, seq_number, args):
     s.send(frame)
 
 
-def recv_frame(src_mac, s, seq_number, args):
+def recv_frame(src_mac, s, args):
     pkt_bytes = s.recv(MAX_PACKET_SIZE)
-    validate_frame(pkt_bytes, src_mac, seq_number, args)
+    validate_frame(pkt_bytes, src_mac, args)
 
 
-def validate_frame(pkt_bytes, src_mac, seq_number, args):
+def validate_frame(pkt_bytes, src_mac, args):
+    global seq_number
     rcv_dst_mac, rcv_src_mac, rcv_type = get_eth_header(pkt_bytes)
 
     rcv_dst_mac_str = mac_address_bytes_to_string(rcv_dst_mac)
     rcv_src_mac_str = mac_address_bytes_to_string(rcv_src_mac)
 
     if rcv_dst_mac != src_mac:
-        raise RuntimeError(f"Bad dst mac {rcv_dst_mac_str} received. Expected {src_mac}")
+        raise RuntimeError(
+            f"Bad dst mac {rcv_dst_mac_str} received. Expected {mac_address_bytes_to_string(src_mac)}"
+        )
 
-    if rcv_src_mac_str != args.dst_mac:
+    if rcv_src_mac_str != args.dst_mac.lower():
         raise RuntimeError(
             f"Bad src mac {rcv_src_mac_str} received. Expected {args.dst_mac}"
         )
@@ -145,9 +156,13 @@ def validate_frame(pkt_bytes, src_mac, seq_number, args):
         )
 
     rcv_seq_number = get_payload(pkt_bytes)[0]
-    if rcv_seq_number != seq_number:
+    exp_seq_number = seq_number
+
+    seq_number = rcv_seq_number + 1  # resync with sender
+
+    if rcv_seq_number != exp_seq_number:
         raise RuntimeError(
-            f"Bad seq number {rcv_seq_number} received. Expected {seq_number}"
+            f"Bad seq number {rcv_seq_number} received. Expected {exp_seq_number}"
         )
 
 
