@@ -79,6 +79,8 @@ def client(args):
 
     signal.signal(signal.SIGINT, signal.default_int_handler)
 
+    send_seq = 0
+
     try:
         while True:
             if (
@@ -87,7 +89,7 @@ def client(args):
             ):
                 break
 
-            send_frame(src_mac, s, seq_number, args)
+            send_frame(src_mac, s, send_seq, args)
 
             try:
                 recv_frame(src_mac, s, args)
@@ -95,7 +97,7 @@ def client(args):
 
             except (socket.timeout, RuntimeError) as err:
                 if args.verbose:
-                    print(f"seq {seq_number}: Rx error: {err}")
+                    print(f"seq {send_seq}: Rx error: {err}")
                 update_stats(global_stats, interval_stats, 1, 0, 1)
 
                 if (
@@ -105,6 +107,7 @@ def client(args):
                     print("Stopped because error threshold reached")
                     exit_code = 1
                     break
+            send_seq += 1
 
             if interval_stats.elapsed_seconds() > args.interval:
                 print(interval_stats)
@@ -156,6 +159,7 @@ def validate_frame(pkt_bytes, src_mac, args):
         )
 
     rcv_seq_number = get_payload(pkt_bytes)[0]
+
     exp_seq_number = seq_number
 
     seq_number = rcv_seq_number + 1  # resync with sender
