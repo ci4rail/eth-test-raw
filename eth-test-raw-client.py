@@ -17,10 +17,13 @@ from ethtestraw_lib import (
     get_mac_address,
 )  # noqa: E402
 
-tool_description = """
+VERSION = "1.0.1"
+
+tool_description = f"""
+Version: {VERSION}.
 Simple test tool for ethernet interfaces.
 Tests a ethernet NIC against a NIC on a peer machine.
-Requires the corresponding server running on the peer machine
+Requires the corresponding server running on the peer machine.
 """
 
 PAYLOAD_BYTES = 1500
@@ -35,6 +38,7 @@ class Stats:
         self.packets_sent = 0
         self.good_packets_received = 0
         self.error_count = 0
+        self.retries = 0
 
     def elapsed_seconds(self):
         elapsed = datetime.datetime.now() - self.start_time
@@ -49,17 +53,19 @@ class Stats:
         return (
             f"sent pkts: {self.packets_sent:5d}, "
             f"errors/lost pkts: {self.error_count:3d}, "
+            f"retry pkts: {self.retries:3d}, "
             f"{self.bytes_per_second()/1e6:6.2f} MByte/s"
         )
 
 
 def update_stats(
-    global_stats, interval_stats, packets_sent, packets_received, error_count
+    global_stats, interval_stats, packets_sent, packets_received, error_count, retry_count
 ):
     for stats in [global_stats, interval_stats]:
         stats.packets_sent += packets_sent
         stats.good_packets_received += packets_received
         stats.error_count += error_count
+        stats.retries += retry_count
 
 
 def client(args):
@@ -89,16 +95,26 @@ def client(args):
             ):
                 break
 
-            send_frame(src_mac, s, send_seq, args)
-
             try:
-                recv_frame(src_mac, s, args)
-                update_stats(global_stats, interval_stats, 1, 1, 0)
+                while True:
+                    send_frame(src_mac, s, send_seq, args)
+                    if recv_frame(src_mac, s, args) == "ok":
+                        break
+                    # Retry if frame is not valid, but error shall be ignored
+                    update_stats(global_stats, interval_stats, 1, 0, 1, 1)
+                    if global_stats.retries >= args.max_retries:
+                        print("Stopped because max retries reached")
+                        exit_code = 1
+                        break
+                    if args.delay is not None:
+                        time.sleep(args.delay / 1e6)
+
+                update_stats(global_stats, interval_stats, 1, 1, 0, 0)
 
             except (socket.timeout, RuntimeError) as err:
                 if args.verbose:
                     print(f"seq {send_seq}: Rx error: {err}")
-                update_stats(global_stats, interval_stats, 1, 0, 1)
+                update_stats(global_stats, interval_stats, 1, 0, 1, 0)
 
                 if (
                     args.error_threshold != -1
@@ -131,11 +147,16 @@ def send_frame(src_mac, s, seq_number, args):
     s.send(frame)
 
 
+# return "retry" if the frame is not valid, but error shall be ignored
+# return "ok" if the frame is valid
+# raise RuntimeError if the frame is not valid and error shall be reported
 def recv_frame(src_mac, s, args):
     pkt_bytes = s.recv(MAX_PACKET_SIZE)
-    validate_frame(pkt_bytes, src_mac, args)
+    return validate_frame(pkt_bytes, src_mac, args)
 
-
+# return "retry" if the frame is not valid, but error shall be ignored
+# return "ok" if the frame is valid
+# raise RuntimeError if the frame is not valid and error shall be reported
 def validate_frame(pkt_bytes, src_mac, args):
     global seq_number
     rcv_dst_mac, rcv_src_mac, rcv_type = get_eth_header(pkt_bytes)
@@ -144,9 +165,9 @@ def validate_frame(pkt_bytes, src_mac, args):
     rcv_src_mac_str = mac_address_bytes_to_string(rcv_src_mac)
 
     if rcv_dst_mac != src_mac:
-        raise RuntimeError(
-            f"Bad dst mac {rcv_dst_mac_str} received. Expected {mac_address_bytes_to_string(src_mac)}"
-        )
+        print(f"WARN: Bad dst mac {rcv_dst_mac_str} received. Expected {mac_address_bytes_to_string(src_mac)}. Ignoring")
+        return "retry"
+        
 
     if rcv_src_mac_str != args.dst_mac.lower():
         raise RuntimeError(
@@ -168,7 +189,7 @@ def validate_frame(pkt_bytes, src_mac, args):
         raise RuntimeError(
             f"Bad seq number {rcv_seq_number} received. Expected {exp_seq_number}"
         )
-
+    return "ok"
 
 def make_payload(payload_length, seq_number):
     payload_hdr = struct.pack("!L", seq_number)
@@ -231,6 +252,12 @@ def command_line_args_parsing():
         help="stop after n errors, -1 to stop never (default: 1)",
         type=int,
         default=1,
+    )
+    parser.add_argument(
+        "--max-retries",
+        help="stop after n retries (default: 50)",
+        type=int,
+        default=50,
     )
     parser.add_argument(
         "-i",
