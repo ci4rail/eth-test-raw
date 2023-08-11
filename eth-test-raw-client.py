@@ -88,7 +88,7 @@ def client(args):
     send_seq = 0
 
     try:
-        while True:
+        while exit_code == 0:
             if (
                 args.runtime is not None
                 and global_stats.elapsed_seconds() > args.runtime  # noqa: W503
@@ -101,9 +101,9 @@ def client(args):
                     if recv_frame(src_mac, s, args) == "ok":
                         break
                     # Retry if frame is not valid, but error shall be ignored
-                    update_stats(global_stats, interval_stats, 1, 0, 1, 1)
+                    update_stats(global_stats, interval_stats, 1, 0, 0, 1)
                     if global_stats.retries >= args.max_retries:
-                        print("Stopped because max retries reached")
+                        print(f"Stopped because max retries {args.max_retries} reached")
                         exit_code = 1
                         break
                     if args.delay is not None:
@@ -120,7 +120,7 @@ def client(args):
                     args.error_threshold != -1
                     and global_stats.error_count >= args.error_threshold  # noqa: W503
                 ):
-                    print("Stopped because error threshold reached")
+                    print(f"Stopped because error threshold {args.error_threshold} reached")
                     exit_code = 1
                     break
             send_seq += 1
@@ -154,11 +154,14 @@ def recv_frame(src_mac, s, args):
     pkt_bytes = s.recv(MAX_PACKET_SIZE)
     return validate_frame(pkt_bytes, src_mac, args)
 
+
+err_inject_count = 0
 # return "retry" if the frame is not valid, but error shall be ignored
 # return "ok" if the frame is valid
 # raise RuntimeError if the frame is not valid and error shall be reported
 def validate_frame(pkt_bytes, src_mac, args):
     global seq_number
+    global err_inject_count
     rcv_dst_mac, rcv_src_mac, rcv_type = get_eth_header(pkt_bytes)
 
     rcv_dst_mac_str = mac_address_bytes_to_string(rcv_dst_mac)
@@ -180,6 +183,11 @@ def validate_frame(pkt_bytes, src_mac, args):
         )
 
     rcv_seq_number = get_payload(pkt_bytes)[0]
+
+    # # Error Injection
+    # err_inject_count += 1
+    # if err_inject_count % 8 == 0:
+    #     return True
 
     exp_seq_number = seq_number
 
