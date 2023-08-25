@@ -132,7 +132,13 @@ def send_frame(src_mac, s, seq_number, args):
 
 
 def recv_frame(src_mac, s, args):
-    pkt_bytes = s.recv(MAX_PACKET_SIZE)
+    while True:
+        # Ignore frames that are not for us. Seems to be a bug in linux stack
+        pkt_bytes = s.recv(MAX_PACKET_SIZE)
+        rcv_dst_mac, _, _ = get_eth_header(pkt_bytes)
+        if rcv_dst_mac == src_mac:
+            break
+
     validate_frame(pkt_bytes, src_mac, args)
 
 
